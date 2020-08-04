@@ -1,0 +1,83 @@
+/*
+Requirements:
+- Install Discord Notifier Plugin
+- Install SSH Pipeline Steps plugin
+
+ */
+
+def buildName = "${env.BRANCH_NAME.replaceAll("[^a-zA-Z0-9]+","-").toLowerCase()}"
+def buildNumber = "${env.BUILD_NUMBER}"
+def projectName = "demo-backend"
+
+node("docker") {
+  stage ("Stage Checkout") {
+    discordSend(description: "Status: starting", link: env.BUILD_URL, title: "${env.JOB_NAME} >> #${env.BUILD_NUMBER}", result: currentBuild.currentResult, webhookURL: env.DISCORD_WEBHOOK)
+    // Checkout code from repository and update any submodules
+    checkout scm
+    sh "git submodule update --init"
+    env.GIT_COMMIT = sh(script: "git rev-parse --short=5 HEAD", returnStdout: true).trim()
+    env.GIT_AUTHOR = sh(returnStdout: true, script: "git show -s --pretty=%an $GIT_COMMIT").trim()
+  }
+
+  stage ("Stage Build") {
+    echo "Build branch: ${env.BRANCH_NAME}"
+	  env.DOCKER_IMAGE_COMMIT = "${env.DOCKER_HUB}/${projectName}:${buildName}-${env.GIT_COMMIT}"
+	  env.DOCKER_IMAGE_LATEST = "${env.DOCKER_HUB}/${projectName}:${buildName}"
+    echo "Build docker image ${env.DOCKER_IMAGE_COMMIT}"
+    echo "Docker path ${env.DOCKER_PATH}"
+    sh "${env.DOCKER_PATH} build -t ${env.DOCKER_IMAGE_COMMIT} -t ${env.DOCKER_IMAGE_LATEST} ."
+  }
+
+  stage ("Stage Push") {
+    echo "Push image to registry"
+    sh "${env.DOCKER_PATH} push ${env.DOCKER_IMAGE_COMMIT}"
+    sh "${env.DOCKER_PATH} push ${env.DOCKER_IMAGE_LATEST}"
+    echo "Set build description"
+    currentBuild.description = "Image: ${env.DOCKER_IMAGE_COMMIT}"
+  }
+
+  stage("Stage Deploy") {
+    if (env.BRANCH_NAME == "develop") {
+          def remote = [:]
+          remote.name = "demo-dev"
+          remote.host = env.DEV_HOST
+          remote.allowAnyHosts = true
+
+          withCredentials([sshUserPrivateKey(credentialsId: 'ubuntu.demo-dev', keyFileVariable: 'identity', passphraseVariable: '', usernameVariable: 'userName')]) {
+              remote.user = userName
+              remote.identityFile = identity
+              sshPut remote: remote, from: 'deploy.sh', into: './deploy-demo.sh'
+              sshCommand remote: remote, command: "sh ./deploy-demo.sh ${env.DOCKER_IMAGE_COMMIT}"
+          }
+      } else if (env.BRANCH_NAME == "master") {
+        discordSend(description: "Status: Confirm", link: "${env.BUILD_URL}input/", title: "${env.JOB_NAME} >> #${env.BUILD_NUMBER}", result: currentBuild.currentResult, webhookURL: env.DISCORD_WEBHOOK)
+        def approve = false;
+        timeout(time: 30, unit: 'MINUTES') {
+            approve = input(
+                id: 'approve', message: 'Confirm deploy to Production!', parameters: [
+                [$class: 'BooleanParameterDefinition', defaultValue: true, description: '', name: 'Approve']
+            ])
+        }
+
+        if(!approve) {
+            error "Deploy wasn't approved"
+        } else {
+          def remote = [:]
+          remote.name = "demo-prod"
+          remote.host = env.PROD_HOST
+          remote.allowAnyHosts = true
+
+          withCredentials([sshUserPrivateKey(credentialsId: 'ubuntu.demo-prod', keyFileVariable: 'identity', passphraseVariable: '', usernameVariable: 'userName')]) {
+              remote.user = userName
+              remote.identityFile = identity
+              sshPut remote: remote, from: 'deploy.sh', into: './deploy-demo.sh'
+              sshCommand remote: remote, command: "sh ./deploy-demo.sh ${env.DOCKER_IMAGE_COMMIT}"
+          }
+        }  
+      } else {
+        echo "Ignore deploy"
+      }
+
+      discordSend(description: "Status: success", link: env.BUILD_URL, title: "${env.JOB_NAME} >> #${env.BUILD_NUMBER}", result: currentBuild.currentResult, webhookURL: env.DISCORD_WEBHOOK)
+   }
+}
