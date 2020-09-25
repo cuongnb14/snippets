@@ -1,0 +1,104 @@
+def PROJECT_NAME = "demo-backend"
+
+pipeline {
+    agent {
+        node {
+            label 'docker'
+        }
+    }
+
+    environment {
+        GIT_COMMIT_REV=""
+        DOCKER_IMAGE_COMMIT = ""
+        BUILD_NAME = "${env.BRANCH_NAME.replaceAll("[^a-zA-Z0-9]+","-").toLowerCase()}"
+        DOCKER_IMAGE_LATEST = "${env.DOCKER_HUB}/${PROJECT_NAME}:${BUILD_NAME}"
+    }
+
+    stages {
+
+        stage('Build') {
+            steps {
+                script {
+                    GIT_COMMIT_REV = sh(returnStdout: true, script: "git rev-parse --short=5 HEAD").trim()
+                    DOCKER_IMAGE_COMMIT = "${env.DOCKER_HUB}/${PROJECT_NAME}:${BUILD_NAME}-${GIT_COMMIT_REV}"
+                }
+
+                discordSend description: "Status: STARTING", link: env.BUILD_URL, result: currentBuild.currentResult, title: currentBuild.fullDisplayName, webhookURL: env.DISCORD_WEBHOOK
+                sh "${env.DOCKER_PATH} build -t ${DOCKER_IMAGE_COMMIT} -t ${DOCKER_IMAGE_LATEST} ."
+                sh "${env.DOCKER_PATH} push ${DOCKER_IMAGE_COMMIT}"
+                sh "${env.DOCKER_PATH} push ${DOCKER_IMAGE_LATEST}"
+            }
+        }
+
+        stage('Deploy Develop') {
+            when { branch 'develop' }
+            steps {
+                script {
+                    // Re-assign for restart this stage case.
+                    GIT_COMMIT_REV = sh(returnStdout: true, script: "git rev-parse --short=5 HEAD").trim()
+                    DOCKER_IMAGE_COMMIT = "${env.DOCKER_HUB}/${PROJECT_NAME}:${BUILD_NAME}-${GIT_COMMIT_REV}"
+                    echo "Deploy use image: ${DOCKER_IMAGE_COMMIT}"
+                    currentBuild.description = "Image: ${DOCKER_IMAGE_COMMIT}"
+
+                    def remote = [:]
+                    remote.name = "${PROJECT_NAME}-dev"
+                    remote.host = env.DEV_HOST
+                    remote.allowAnyHosts = true
+
+                    withCredentials([sshUserPrivateKey(credentialsId: 'ubuntu.server-dev', keyFileVariable: 'identity', passphraseVariable: '', usernameVariable: 'userName')]) {
+                        remote.user = userName
+                        remote.identityFile = identity
+                        sshPut remote: remote, from: 'deploy.sh', into: './deploy-demo.sh'
+                        sshCommand remote: remote, command: "sh ./deploy-demo.sh ${DOCKER_IMAGE_COMMIT} ${env.EFK_DEV_HOST}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Production') {
+            when { branch 'master' }
+            steps {
+                script {
+                    // Re-assign for restart this stage case.
+                    GIT_COMMIT_REV = sh(returnStdout: true, script: "git rev-parse --short=5 HEAD").trim()
+                    DOCKER_IMAGE_COMMIT = "${env.DOCKER_HUB}/${PROJECT_NAME}:${BUILD_NAME}-${GIT_COMMIT_REV}"
+                    echo "Deploy use image: ${DOCKER_IMAGE_COMMIT}"
+                    currentBuild.description = "Image: ${DOCKER_IMAGE_COMMIT}"
+
+                    discordSend(description: "Status: Confirm", link: "${env.BUILD_URL}input/", title: currentBuild.fullDisplayName, webhookURL: env.DISCORD_WEBHOOK)
+                    def approve = false;
+                    timeout(time: 30, unit: 'MINUTES') {
+                        approve = input(
+                            id: 'approve', message: 'Confirm deploy to Production!', parameters: [
+                            [$class: 'BooleanParameterDefinition', defaultValue: true, description: '', name: 'Approve']
+                        ])
+                    }
+
+                    if(!approve) {
+                        error "Deploy wasn't approved"
+                    } else {
+                        def remote = [:]
+                        remote.name = "${PROJECT_NAME}-prod"
+                        remote.host = env.PROD_HOST
+                        remote.allowAnyHosts = true
+
+                        withCredentials([sshUserPrivateKey(credentialsId: 'ubuntu.server-prod', keyFileVariable: 'identity', passphraseVariable: '', usernameVariable: 'userName')]) {
+                            remote.user = userName
+                            remote.identityFile = identity
+                            sshPut remote: remote, from: 'deploy.sh', into: './deploy-demo.sh'
+                            sshCommand remote: remote, command: "sh ./deploy-demo.sh ${DOCKER_IMAGE_COMMIT} ${env.EFK_PROD_HOST}"
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+
+    post {
+        always {
+            discordSend description: "Status: ${currentBuild.result}", link: env.BUILD_URL, result: currentBuild.currentResult, title: currentBuild.fullDisplayName, webhookURL: env.DISCORD_WEBHOOK
+        }
+    }
+
+}
