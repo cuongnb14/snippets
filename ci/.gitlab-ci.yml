@@ -73,6 +73,20 @@ deploy_staging:
   only:
     - staging
 
+# Remote deploy
+# deploy_staging:
+#   stage: deploy
+#   script:
+#   - rsync -r --del deploy/ $TARGET_SERVER:~/$PROJECT_NAME/
+#   - ssh $TARGET_SERVER "sh ~/$PROJECT_NAME/$DEVLOY_SCRIPT $PROJECT_NAME $IMAGE_URL:$IMAGE_TAG"
+#   variables:
+#     IMAGE_TAG: develop.$CI_PIPELINE_ID
+#     TARGET_SERVER: root@133.133.133.133
+#     DEVLOY_SCRIPT: deploy-dev.sh
+#   only:
+#     - staging
+
+
 # CI for production
 # -------------------------------------------------------------------------------
 build_prod:
