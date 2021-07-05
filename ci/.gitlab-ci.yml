@@ -1,7 +1,8 @@
 variables:
+  PROJECT_NAME: demo_backend
   DOCKER_REGISTRY: demo_backend
-  IMAGE_NAME: demo_backend
-  IMAGE_URL: $DOCKER_REGISTRY/$IMAGE_NAME
+  
+  IMAGE_URL: $DOCKER_REGISTRY/$PROJECT_NAME
 
 stages:
 - lint
@@ -13,12 +14,16 @@ stages:
 build_staging:
   stage: build
   script:
-  - docker build -t $IMAGE_URL:$IMAGE_TAG --file=Dockerfile .
+  - docker build -t $IMAGE_URL:$IMAGE_TAG -t $IMAGE_URL:$LASTEST_TAG --file=Dockerfile .
+  
+  # - docker push $IMAGE_URL:$IMAGE_TAG
+  # - docker push $IMAGE_URL:$LASTEST_TAG
 
   # remove old images version keep 2 version
-  - docker images | egrep -e "$IMAGE_URL" | tail -n +3 | awk '{print $3}' | xargs -r docker rmi -f
+  - docker images | egrep -e "$IMAGE_URL" | tail -n +3 | awk '{print $3}' | xargs -r docker rmi -f || echo 'ignore'
   variables:
-    IMAGE_TAG: b1.0.$CI_PIPELINE_ID
+    IMAGE_TAG: develop.$CI_PIPELINE_ID
+    LASTEST_TAG: develop
 
   tags:
   - staging
@@ -43,11 +48,14 @@ deploy_staging:
     --env-file $ENV_FILE
     --label "traefik.enable=true"
     --label "traefik.docker.network=$NETWORK"
-    --label "traefik.http.routers.devapi.rule=Host(\`$DOMAIN\`)"
-    --label "traefik.http.routers.devapi.entrypoints=https"
-    --label "traefik.http.routers.devapi.tls.certresolver=ssl"
-    --label "traefik.http.services.devapi.loadbalancer.server.port=8000"
+    --label "traefik.http.routers.$CONTAINER_NAME.rule=Host(\`$DOMAIN\`)"
+    --label "traefik.http.routers.$CONTAINER_NAME.entrypoints=https"
+    --label "traefik.http.routers.$CONTAINER_NAME.tls.certresolver=ssl"
+    --label "traefik.http.services.$CONTAINER_NAME.loadbalancer.server.port=8000"
     --network $NETWORK
+    --log-driver json-file
+    --log-opt max-size=100M 
+    --log-opt max-file=3
     $IMAGE_URL:$IMAGE_TAG honcho start -f Procfile
 
   - docker exec $CONTAINER_NAME python3 manage.py migrate
@@ -55,7 +63,7 @@ deploy_staging:
 
   variables:
     IMAGE_TAG: b1.0.$CI_PIPELINE_ID
-    CONTAINER_NAME: $IMAGE_NAME
+    CONTAINER_NAME: $PROJECT_NAME
     NETWORK: example-net
     DOMAIN: dev.example.com
     ENV_FILE: ./.env.staging
@@ -85,7 +93,7 @@ deploy_prod:
   # when: manual
   variables:
     IMAGE_TAG: r1.0.$CI_PIPELINE_ID
-    CONTAINER_NAME: $IMAGE_NAME
+    CONTAINER_NAME: $PROJECT_NAME
     NETWORK: example-net
     ENV_FILE: ./.env.prod
     DOMAIN: example.com
