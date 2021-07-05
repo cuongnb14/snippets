@@ -77,7 +77,7 @@ deploy_staging:
 # deploy_staging:
 #   stage: deploy
 #   script:
-#   - rsync -r --del deploy/ $TARGET_SERVER:~/$PROJECT_NAME/
+#   - rsync -e "ssh -o StrictHostKeyChecking=no" -r --del deploy/ $TARGET_SERVER:~/$PROJECT_NAME/
 #   - ssh $TARGET_SERVER "sh ~/$PROJECT_NAME/$DEVLOY_SCRIPT $PROJECT_NAME $IMAGE_URL:$IMAGE_TAG"
 #   variables:
 #     IMAGE_TAG: develop.$CI_PIPELINE_ID
